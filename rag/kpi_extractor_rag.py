@@ -153,7 +153,7 @@ def extract_financial_metrics(
         company=company,
         year=year
     )
-
+    
     prompt = build_extraction_prompt(
         company=company,
         year=year,

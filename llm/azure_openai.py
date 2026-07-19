@@ -9,6 +9,31 @@ import json
 import openai
 
 
+def _normalize_key(key: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", key.lower())
+
+
+def _remap_to_aliases(data: dict, response_model: type[BaseModel]) -> dict:
+    """
+    Map arbitrary LLM-chosen JSON key casing/spacing (e.g. "NetIncome",
+    "net_income") back onto the exact aliases response_model expects
+    (e.g. "Net Income"), so validation doesn't silently drop fields
+    whose key formatting drifted between calls.
+    """
+    alias_by_normalized = {}
+    for name, field in response_model.model_fields.items():
+        alias = field.alias or name
+        alias_by_normalized[_normalize_key(alias)] = alias
+        alias_by_normalized[_normalize_key(name)] = alias
+
+    remapped = {}
+    for key, value in data.items():
+        target = alias_by_normalized.get(_normalize_key(key))
+        if target:
+            remapped[target] = value
+    return remapped
+
+
 def get_openai_client() -> AzureOpenAI:
     """
     Create Azure OpenAI client.
@@ -102,11 +127,9 @@ def get_structured_completion(
                     except Exception:
                         raise RuntimeError("Model returned null and cannot construct an empty instance; please check the model schema or use a deployment that supports structured outputs.")
 
-                # pydantic v2: model_validate_json; v1 fallback to parse_raw
-                if hasattr(response_model, "model_validate_json"):
-                    parsed = response_model.model_validate_json(json_text)
-                else:
-                    parsed = response_model.parse_raw(json_text)
+                data = json.loads(json_text)
+                remapped = _remap_to_aliases(data, response_model)
+                parsed = response_model.model_validate(remapped)
 
                 return parsed
             except Exception as e:
