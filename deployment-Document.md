@@ -97,7 +97,7 @@ az account show
 Login using Azure CLI.
 
 ```bash
-az acr login --name invintelligence
+az acr login --name invinteligence
 ```
 
 Alternative login using username/password.
@@ -105,19 +105,19 @@ Alternative login using username/password.
 Retrieve credentials.
 
 ```bash
-az acr credential show --name invintelligence
+az acr credential show --name invinteligence
 ```
 
 Login manually.
 
 ```bash
-docker login invintelligence.azurecr.io
+docker login invinteligence.azurecr.io
 ```
 
 Provide:
 
 ```text
-Username: invintelligence
+Username: invinteligence
 Password: <acr-password>
 ```
 
@@ -134,7 +134,7 @@ Login Succeeded
 Tag local image for ACR.
 
 ```bash
-docker tag invint:latest invintelligence.azurecr.io/invint:v1
+docker tag invint:latest invinteligence.azurecr.io/invint:v1
 ```
 
 Verify image.
@@ -146,7 +146,7 @@ docker images
 Expected Output:
 
 ```text
-invintelligence.azurecr.io/invint    v1
+invinteligence.azurecr.io/invint    v1
 ```
 
 ---
@@ -156,13 +156,13 @@ invintelligence.azurecr.io/invint    v1
 Push image.
 
 ```bash
-docker push invintelligence.azurecr.io/invint:v1
+docker push invinteligence.azurecr.io/invint:v1
 ```
 
 Verify image push.
 
 ```bash
-az acr repository list --name invintelligence --output table
+az acr repository list --name invinteligence --output table
 ```
 
 ---
@@ -172,7 +172,7 @@ az acr repository list --name invintelligence --output table
 Download cluster credentials.
 
 ```bash
-az aks get-credentials --resource-group rg-inv-intelligence --name inv-intelligence-aks --overwrite-existing
+az aks get-credentials --resource-group rg-inv-intelligence --name inv-intelligence-cluster --overwrite-existing
 ```
 
 Verify connection.
@@ -195,20 +195,21 @@ Ready
 Attach ACR to AKS.
 
 ```bash
-az aks update --resource-group rg-inv-intelligence --name inv-intelligence-aks --attach-acr invintelligence
+az aks update --resource-group rg-inv-intelligence --name inv-intelligence-cluster --attach-acr invinteligence
 ```
 
 Verify access.
 
 ```bash
-az aks check-acr --resource-group rg-inv-intelligence --name inv-intelligence-aks --acr invintelligence
+az aks check-acr --resource-group rg-inv-intelligence --name inv-intelligence-cluster --acr invinteligence
 ```
 
 Expected Output:
 
 ```text
-Your cluster can pull images from invintelligence.azurecr.io!
+Your cluster can pull images from invinteligence.azurecr.io!
 ```
+
 
 ---
 
@@ -219,15 +220,15 @@ If AKS cannot pull images directly from ACR, create a Docker Registry Secret.
 Retrieve ACR credentials.
 
 ```bash
-az acr credential show --name invintelligence
+az acr credential show --name invinteligence
 ```
 
 Create secret.
 
 ```bash
 kubectl create secret docker-registry acr-secret \
-  --docker-server=invintelligence.azurecr.io \
-  --docker-username=invintelligence \
+  --docker-server=invinteligence.azurecr.io \
+  --docker-username=invinteligence \
   --docker-password=<acr-password>
 ```
 
@@ -244,7 +245,7 @@ kubectl patch serviceaccount default -p "{\"imagePullSecrets\": [{\"name\": \"ac
 Create deployment.
 
 ```bash
-kubectl create deployment invint --image=invintelligence.azurecr.io/invint:v1
+kubectl create deployment invint --image=invinteligence.azurecr.io/invint:v1
 ```
 
 Verify deployment.
@@ -315,6 +316,70 @@ Describe pod.
 
 ```bash
 kubectl describe pod <pod-name>
+```
+
+---
+
+# Bugs I Encountered During Deployment
+
+## Bug 1: Pod crashed on startup — Postgres connection failing over a local socket
+
+After Step 10, `kubectl logs <pod-name>` showed the app crash immediately on startup:
+
+```text
+psycopg2.OperationalError: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory
+Failed to create database: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory
+```
+
+`kubectl create deployment` doesn't set any environment variables on the pod. My app reads `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DATABASE` (plus the Azure OpenAI/Search keys) from the environment via `os.getenv(...)`, and `.env` is deliberately excluded from the Docker image (see `.dockerignore`), so none of it was set. With `POSTGRES_HOST` empty, `psycopg2` fell back to a local Unix socket that doesn't exist inside the container.
+
+I fixed it by creating a Secret from my local `.env` and injecting it into the deployment:
+
+```bash
+kubectl create secret generic app-env --from-env-file=.env
+kubectl set env deployment/invint --from=secret/app-env
+```
+
+## Bug 2: Pod stuck at "Waiting for application startup" forever, no error
+
+After fixing Bug 1 and letting the rollout restart, the pod showed `Running` / `1/1` (there's no readiness probe defined, so Kubernetes marks it ready as soon as the process starts — that doesn't mean the app is actually up), but the logs never moved past:
+
+```text
+INFO:     Waiting for application startup.
+```
+
+No error, no crash, no timeout for several minutes — just silence. A hang like that (instead of a fast auth/connection-refused error) usually means the TCP handshake itself is being dropped, not rejected at the app layer. I checked the Azure PostgreSQL flexible server's firewall:
+
+```bash
+az postgres flexible-server firewall-rule list --resource-group rg-inv-intelligence --server-name inv-intelligence -o table
+```
+
+It only allow-listed two old IPs from local development — not AKS's outbound IP. I found the cluster's real outbound IP and opened it up:
+
+```bash
+az aks show --resource-group rg-inv-intelligence --name inv-intelligence-cluster --query "networkProfile.loadBalancerProfile.effectiveOutboundIPs[0].id" -o tsv
+
+az network public-ip show --ids <id from above> --query ipAddress -o tsv
+
+az postgres flexible-server firewall-rule create \
+  --resource-group rg-inv-intelligence \
+  --server-name inv-intelligence \
+  --name AllowAKSCluster \
+  --start-ip-address <aks-outbound-ip> \
+  --end-ip-address <aks-outbound-ip>
+```
+
+Then restarted the rollout and confirmed:
+
+```bash
+kubectl rollout restart deployment/invint
+kubectl rollout status deployment/invint
+kubectl logs <new-pod-name> --tail=10
+```
+
+```text
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
 
 ---
@@ -451,13 +516,13 @@ az aks list --output table
 Get AKS Credentials
 
 ```bash
-az aks get-credentials --resource-group rg-inv-intelligence --name inv-intelligence-aks --overwrite-existing
+az aks get-credentials --resource-group rg-inv-intelligence --name inv-intelligence-cluster --overwrite-existing
 ```
 
 Delete AKS Cluster
 
 ```bash
-az aks delete --resource-group rg-inv-intelligence --name inv-intelligence-aks --yes --no-wait
+az aks delete --resource-group rg-inv-intelligence --name inv-intelligence-cluster --yes --no-wait
 ```
 
 Verify Deletion
@@ -479,19 +544,19 @@ az acr list --output table
 Show Registry Details
 
 ```bash
-az acr show --name invintelligence
+az acr show --name invinteligence
 ```
 
 Show Registry Credentials
 
 ```bash
-az acr credential show --name invintelligence
+az acr credential show --name invinteligence
 ```
 
 Delete Registry
 
 ```bash
-az acr delete --name invintelligence --resource-group rg-inv-intelligence --yes
+az acr delete --name invinteligence --resource-group rg-inv-intelligence --yes
 ```
 
 ---
