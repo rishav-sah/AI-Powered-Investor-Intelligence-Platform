@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI-Powered Investor Intelligence Platform</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
 </head>
 <body>
 
@@ -40,6 +40,14 @@
             </div>
             <div class="progress-bar-bg">
                 <div class="progress-bar-fill" id="progressBarFill"></div>
+            </div>
+        </div>
+
+        <!-- Uploaded Documents List -->
+        <div class="documents-section">
+            <div class="documents-header">Uploaded Documents</div>
+            <div class="documents-list" id="documentsList">
+                <div class="documents-empty">Loading...</div>
             </div>
         </div>
 
@@ -562,6 +570,28 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    const STAGE_PROGRESS = {
+        queued: 45,
+        parsing: 50,
+        converting: 58,
+        chunking: 68,
+        indexing: 80,
+        extracting: 92,
+        saving: 97,
+        done: 100
+    };
+
+    const STAGE_LABELS = {
+        queued: 'Waiting to start...',
+        parsing: 'Reading document...',
+        converting: 'Converting PDF to Markdown...',
+        chunking: 'Splitting into semantic chunks...',
+        indexing: 'Indexing chunks...',
+        extracting: 'Extracting financial KPIs...',
+        saving: 'Saving metrics...',
+        done: 'Success!'
+    };
+
     function handleUpload(file) {
         if (!file.name.toLowerCase().endsWith('.pdf')) {
             showToast('Invalid File Type', 'Please upload a PDF financial report.', 'error');
@@ -570,8 +600,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
         progressContainer.style.display = 'block';
         progressStatus.textContent = 'Uploading report...';
-        progressBarFill.style.width = '15%';
-        progressPercent.textContent = '15%';
+        progressBarFill.style.width = '10%';
+        progressPercent.textContent = '10%';
 
         const formData = new FormData();
         formData.append('file', file);
@@ -581,7 +611,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         xhr.upload.onprogress = (e) => {
             if (e.lengthComputable) {
-                const percent = Math.round((e.loaded / e.total) * 45);
+                const percent = Math.round((e.loaded / e.total) * 35) + 10; // 10-45%
                 progressBarFill.style.width = `${percent}%`;
                 progressPercent.textContent = `${percent}%`;
             }
@@ -589,37 +619,32 @@ document.addEventListener("DOMContentLoaded", () => {
 
         xhr.onload = () => {
             if (xhr.status >= 200 && xhr.status < 300) {
-                progressBarFill.style.width = '75%';
-                progressPercent.textContent = '75%';
-                progressStatus.textContent = 'Extracting KPIs...';
-                
-                let extractProgress = 75;
-                const interval = setInterval(() => {
-                    if (extractProgress < 95) {
-                        extractProgress += 2;
-                        progressBarFill.style.width = `${extractProgress}%`;
-                        progressPercent.textContent = `${extractProgress}%`;
-                    }
-                }, 400);
+                let data;
+                try {
+                    data = JSON.parse(xhr.responseText);
+                } catch (e) {
+                    progressContainer.style.display = 'none';
+                    showToast('Ingestion Failed', 'Unexpected response from server.', 'error');
+                    return;
+                }
 
-                setTimeout(() => {
-                    clearInterval(interval);
-                    progressBarFill.style.width = '100%';
-                    progressPercent.textContent = '100%';
-                    progressStatus.textContent = 'Success!';
-                    
-                    showToast('Ingestion Complete', `Successfully extracted metrics for report.`, 'success');
-                    
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 1200);
-                }, 4000);
+                if (!data.job_id) {
+                    progressContainer.style.display = 'none';
+                    showToast('Ingestion Failed', 'No job ID returned by server.', 'error');
+                    return;
+                }
+
+                progressBarFill.style.width = '45%';
+                progressPercent.textContent = '45%';
+                progressStatus.textContent = 'Processing...';
+
+                pollJobStatus(data.job_id);
             } else {
                 progressBarFill.style.width = '0%';
                 progressContainer.style.display = 'none';
                 try {
                     const res = JSON.parse(xhr.responseText);
-                    showToast('Ingestion Failed', res.message || 'Error processing report.', 'error');
+                    showToast('Ingestion Failed', res.detail || res.message || 'Error processing report.', 'error');
                 } catch(e) {
                     showToast('Ingestion Failed', 'Internal server error occurred.', 'error');
                 }
@@ -635,8 +660,58 @@ document.addEventListener("DOMContentLoaded", () => {
         xhr.send(formData);
     }
 
+    function pollJobStatus(jobId) {
+        const poll = async () => {
+            let response;
+            try {
+                response = await fetch(`/api/upload/status/${encodeURIComponent(jobId)}`);
+            } catch (err) {
+                progressContainer.style.display = 'none';
+                showToast('Connection Error', 'Lost connection while checking upload status.', 'error');
+                return;
+            }
+
+            if (!response.ok) {
+                progressContainer.style.display = 'none';
+                showToast('Ingestion Failed', 'Lost track of the upload job.', 'error');
+                return;
+            }
+
+            const job = await response.json();
+
+            const pct = STAGE_PROGRESS[job.stage] || 45;
+            progressBarFill.style.width = `${pct}%`;
+            progressPercent.textContent = `${pct}%`;
+            progressStatus.textContent = job.message || STAGE_LABELS[job.stage] || 'Processing...';
+
+            if (job.status === 'completed') {
+                progressBarFill.style.width = '100%';
+                progressPercent.textContent = '100%';
+                progressStatus.textContent = 'Success!';
+                showToast('Ingestion Complete', `Successfully extracted metrics for ${job.file_name}.`, 'success');
+                setTimeout(() => window.location.reload(), 1200);
+                return;
+            }
+
+            if (job.status === 'failed') {
+                progressContainer.style.display = 'none';
+                showToast('Ingestion Failed', job.error || 'Error processing report.', 'error');
+                return;
+            }
+
+            setTimeout(poll, 1500);
+        };
+
+        poll();
+    }
+
     // ----------------------------------------------------
-    // 4. Chat Input – Enter key support
+    // 4. Uploaded Documents List
+    // ----------------------------------------------------
+    loadDocuments();
+
+    // ----------------------------------------------------
+    // 5. Chat Input – Enter key support
     // ----------------------------------------------------
     const chatInput = document.getElementById('chatInput');
     if (chatInput) {
@@ -702,6 +777,87 @@ function switchCompany(companyName) {
                 <svg viewBox="0 0 24 24"><path d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
                 <span>No high-risk factors identified for this period.</span>
             </div>`;
+    }
+}
+
+// ----------------------------------------------------
+// Uploaded Documents List – Load, Render, Delete
+// ----------------------------------------------------
+async function loadDocuments() {
+    const list = document.getElementById('documentsList');
+    if (!list) return;
+
+    try {
+        const response = await fetch('/api/documents');
+        if (!response.ok) throw new Error(`Server error (${response.status})`);
+        const data = await response.json();
+        renderDocuments(data.documents || []);
+    } catch (err) {
+        list.innerHTML = '<div class="documents-empty">Failed to load documents.</div>';
+    }
+}
+
+function renderDocuments(documents) {
+    const list = document.getElementById('documentsList');
+    if (!list) return;
+
+    if (documents.length === 0) {
+        list.innerHTML = '<div class="documents-empty">No documents uploaded yet.</div>';
+        return;
+    }
+
+    list.innerHTML = '';
+
+    documents.forEach(doc => {
+        const item = document.createElement('div');
+        item.className = 'document-item';
+
+        const info = document.createElement('div');
+        info.className = 'document-item-info';
+        info.title = doc.file_name;
+        info.innerHTML = `
+            <svg class="document-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <span class="document-item-name">${escapeHtml(doc.file_name)}</span>
+        `;
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'document-delete-btn';
+        deleteBtn.title = 'Delete document';
+        deleteBtn.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 7h12M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3m2 0v13a2 2 0 01-2 2H8a2 2 0 01-2-2V7h12z" />
+            </svg>
+        `;
+        deleteBtn.addEventListener('click', () => deleteDocument(doc.file_name));
+
+        item.appendChild(info);
+        item.appendChild(deleteBtn);
+        list.appendChild(item);
+    });
+}
+
+async function deleteDocument(fileName) {
+    if (!confirm(`Delete "${fileName}" and all its associated data (indexed chunks + KPI metrics)? This cannot be undone.`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/documents/${encodeURIComponent(fileName)}`, {
+            method: 'DELETE'
+        });
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            showToast('Delete Failed', data.detail || 'Could not delete document.', 'error');
+            return;
+        }
+
+        showToast('Document Deleted', `"${fileName}" and its data were removed.`, 'success');
+        setTimeout(() => window.location.reload(), 1200);
+    } catch (err) {
+        showToast('Connection Error', 'Failed to communicate with the server.', 'error');
     }
 }
 

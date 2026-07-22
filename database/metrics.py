@@ -25,3 +25,12 @@ def get_metrics():
         rows = [dict(row._mapping) for row in result]
 
     return rows
+
+
+def delete_metrics(company: str, year: str) -> None:
+    engine = get_engine()
+
+    query = "DELETE FROM financial_metrics WHERE company = :company AND year = :year"
+
+    with engine.begin() as connection:
+        connection.execute(text(query), {"company": company, "year": str(year)})

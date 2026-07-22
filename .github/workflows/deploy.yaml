@@ -16,15 +16,6 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Login to ACR
-        run: |
-          az acr login --name ${{ secrets.ACR_NAME }}
-
       - name: Docker Login to ACR
         run: |
           docker login ${{ secrets.ACR_LOGIN_SERVER }} \
@@ -41,13 +32,21 @@ jobs:
           docker push \
             ${{ secrets.ACR_LOGIN_SERVER }}/invint:latest
 
-      - name: Get AKS Credentials
+      - name: Configure kubectl
         run: |
-          az aks get-credentials \
-            --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} \
-            --name ${{ secrets.AKS_CLUSTER_NAME }} \
-            --overwrite-existing
-            
+          echo "${{ secrets.AKS_CA_CERT }}" | base64 -d > ${{ runner.temp }}/ca.crt
+          kubectl config set-cluster aks-cluster \
+            --server="${{ secrets.AKS_API_SERVER }}" \
+            --certificate-authority=${{ runner.temp }}/ca.crt \
+            --embed-certs=true
+          kubectl config set-credentials github-actions-deployer \
+            --token="${{ secrets.AKS_SA_TOKEN }}"
+          kubectl config set-context aks-context \
+            --cluster=aks-cluster \
+            --user=github-actions-deployer \
+            --namespace=default
+          kubectl config use-context aks-context
+
       - name: Create Kubernetes Secrets
         run: |
           kubectl create secret generic invint-secrets \

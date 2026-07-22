@@ -1,3 +1,5 @@
+import time
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,6 +19,11 @@ load_dotenv()
 app = FastAPI(
     title="AI-Powered Investor Intelligence Platform"
 )
+
+# Changes every process start (i.e. every deploy), so appending it to static
+# asset URLs forces browsers to fetch the new file instead of serving a
+# stale cached copy of style.css/etc. from before the deploy.
+STATIC_VERSION = str(int(time.time()))
 
 
 @app.on_event("startup")
@@ -72,7 +79,8 @@ def dashboard(request: Request):
         context={
             "metrics": metrics,
             "total_companies": len(metrics),
-            "total_reports": len(metrics)
+            "total_reports": len(metrics),
+            "static_version": STATIC_VERSION
         }
     )
 

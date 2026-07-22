@@ -35,13 +35,15 @@ class Retriever:
         """
         Retrieve relevant chunks from Azure AI Search.
         """
-        filter_expr = None
+        filters = []
 
-        if company and year:
-            filter_expr = (
-                f"company eq '{company}' "
-                f"and year eq '{year}'"
-            )
+        if company:
+            filters.append(f"company eq '{company}'")
+
+        if year:
+            filters.append(f"year eq '{year}'")
+
+        filter_expr = " and ".join(filters) if filters else None
 
         results = (
             self.client.search(

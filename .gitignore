@@ -53,3 +53,6 @@ dist/
 # Sensitive files
 secrets.json
 credentials.json
+
+# Private working notes (not for the public repo)
+ingestion-pipeline-bug-fixes.md
