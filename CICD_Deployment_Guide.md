@@ -5,7 +5,7 @@ This document explains every field used in the following files:
 ```text
 k8s/deployment.yaml
 k8s/service.yaml
-.github/workflows/deploy.yml
+.github/workflows/deploy.yaml
 ```
 
 The goal is to understand not only what each field does, but also why we are using it in our Investor Intelligence Platform project.
@@ -39,12 +39,16 @@ spec:
       containers:
       - name: invint
 
-        image: invintelligence.azurecr.io/invint:latest
+        image: invinteligence.azurecr.io/invint:latest
+
+        imagePullPolicy: Always
+
+        envFrom:
+        - secretRef:
+            name: invint-secrets
 
         ports:
         - containerPort: 8000
-
-        imagePullPolicy: Always
 ```
 
 ---
@@ -228,7 +232,7 @@ When multiple containers exist inside a pod, this name becomes important.
 ## image
 
 ```yaml
-image: invintelligence.azurecr.io/invint:latest
+image: invinteligence.azurecr.io/invint:latest
 ```
 
 This tells Kubernetes where the application image is stored.
@@ -236,7 +240,7 @@ This tells Kubernetes where the application image is stored.
 Breakdown:
 
 ```text
-Registry    : invintelligence.azurecr.io
+Registry    : invinteligence.azurecr.io
 Repository  : invint
 Tag         : latest
 ```
@@ -291,6 +295,22 @@ This instructs Kubernetes to always check ACR for the latest image before starti
 This is useful during CI/CD because every deployment automatically pulls the newest image.
 
 Without this, Kubernetes may reuse an older cached image.
+
+---
+
+## envFrom
+
+```yaml
+envFrom:
+- secretRef:
+    name: invint-secrets
+```
+
+This injects every key in the `invint-secrets` Kubernetes Secret into the container as an environment variable, without listing each one individually in this file.
+
+`invint-secrets` isn't checked into this manifest — the workflow's **Create Kubernetes Secrets** step (see the `deploy.yaml` section below) creates or updates it on every run from the GitHub Actions repository secrets, right before this file is applied.
+
+Without this field, the app's `os.getenv(...)` calls (Postgres, Azure OpenAI, Azure AI Search config) would all return `None` and the app would crash on startup.
 
 ---
 
@@ -488,7 +508,7 @@ FastAPI Application
 
 ---
 
-# deploy.yml
+# deploy.yaml
 
 ## Complete File
 
@@ -498,7 +518,7 @@ name: Build and Deploy to AKS
 on:
   push:
     branches:
-      - cicd-setup
+      - main
 
 jobs:
 
@@ -511,14 +531,11 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Login to ACR
+      - name: Docker Login to ACR
         run: |
-          az acr login --name ${{ secrets.ACR_NAME }}
+          docker login ${{ secrets.ACR_LOGIN_SERVER }} \
+            -u ${{ secrets.ACR_USERNAME }} \
+            -p ${{ secrets.ACR_PASSWORD }}
 
       - name: Build Docker Image
         run: |
@@ -530,12 +547,40 @@ jobs:
           docker push \
             ${{ secrets.ACR_LOGIN_SERVER }}/invint:latest
 
-      - name: Get AKS Credentials
+      - name: Configure kubectl
         run: |
-          az aks get-credentials \
-            --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} \
-            --name ${{ secrets.AKS_CLUSTER_NAME }} \
-            --overwrite-existing
+          echo "${{ secrets.AKS_CA_CERT }}" | base64 -d > ${{ runner.temp }}/ca.crt
+          kubectl config set-cluster aks-cluster \
+            --server="${{ secrets.AKS_API_SERVER }}" \
+            --certificate-authority=${{ runner.temp }}/ca.crt \
+            --embed-certs=true
+          kubectl config set-credentials github-actions-deployer \
+            --token="${{ secrets.AKS_SA_TOKEN }}"
+          kubectl config set-context aks-context \
+            --cluster=aks-cluster \
+            --user=github-actions-deployer \
+            --namespace=default
+          kubectl config use-context aks-context
+
+      - name: Create Kubernetes Secrets
+        run: |
+          kubectl create secret generic invint-secrets \
+            --from-literal=AZURE_OPENAI_ENDPOINT="${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
+            --from-literal=AZURE_OPENAI_CHAT_ENDPOINT="${{ secrets.AZURE_OPENAI_CHAT_ENDPOINT }}" \
+            --from-literal=AZURE_OPENAI_API_KEY="${{ secrets.AZURE_OPENAI_API_KEY }}" \
+            --from-literal=AZURE_OPENAI_API_EMBEDDING_VERSION="${{ secrets.AZURE_OPENAI_API_EMBEDDING_VERSION }}" \
+            --from-literal=AZURE_OPENAI_API_VERSION="${{ secrets.AZURE_OPENAI_API_VERSION }}" \
+            --from-literal=AZURE_SEARCH_ENDPOINT="${{ secrets.AZURE_SEARCH_ENDPOINT }}" \
+            --from-literal=AZURE_SEARCH_API_KEY="${{ secrets.AZURE_SEARCH_API_KEY }}" \
+            --from-literal=AZURE_SEARCH_INDEX_NAME="${{ secrets.AZURE_SEARCH_INDEX_NAME }}" \
+            --from-literal=AZURE_OPENAI_EMBEDDING_DEPLOYMENT="${{ secrets.AZURE_OPENAI_EMBEDDING_DEPLOYMENT }}" \
+            --from-literal=AZURE_OPENAI_CHAT_DEPLOYMENT="${{ secrets.AZURE_OPENAI_CHAT_DEPLOYMENT }}" \
+            --from-literal=POSTGRES_HOST="${{ secrets.POSTGRES_HOST }}" \
+            --from-literal=POSTGRES_PORT="${{ secrets.POSTGRES_PORT }}" \
+            --from-literal=POSTGRES_DATABASE="${{ secrets.POSTGRES_DATABASE }}" \
+            --from-literal=POSTGRES_USER="${{ secrets.POSTGRES_USER }}" \
+            --from-literal=POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Deploy Application
         run: |
@@ -571,7 +616,7 @@ This helps identify the workflow in the Actions dashboard.
 on:
   push:
     branches:
-      - cicd-setup
+      - main
 ```
 
 This tells GitHub when to execute the pipeline.
@@ -579,7 +624,7 @@ This tells GitHub when to execute the pipeline.
 Whenever code is pushed to:
 
 ```text
-cicd-setup
+main
 ```
 
 the workflow automatically starts.
@@ -616,31 +661,15 @@ Build Fails
 
 ---
 
-## Azure Login
+## Docker Login to ACR
 
 ```yaml
-uses: azure/login@v2
+docker login ${{ secrets.ACR_LOGIN_SERVER }} \
+  -u ${{ secrets.ACR_USERNAME }} \
+  -p ${{ secrets.ACR_PASSWORD }}
 ```
 
-Authenticates GitHub Actions with Azure.
-
-This step allows the pipeline to:
-
-```text
-Access AKS
-Access ACR
-Execute Azure CLI Commands
-```
-
----
-
-## Login to ACR
-
-```yaml
-az acr login
-```
-
-Authenticates Docker against Azure Container Registry.
+Authenticates Docker against Azure Container Registry using the registry's built-in admin account, instead of an Azure AD identity.
 
 Without this step:
 
@@ -648,6 +677,8 @@ Without this step:
 Docker Push Fails
 Unauthorized Error
 ```
+
+Why not `azure/login` + `az acr login` (an Azure AD service principal)? This project's Azure subscription lives inside FIU's Azure AD tenant, which has application registration turned off for regular accounts — `az ad sp create-for-rbac` fails with `Insufficient privileges to complete the operation`, so there's no way to mint the client-ID/client-secret pair that `azure/login` needs. Authenticating with the ACR's own admin username/password (`az acr credential show --name invinteligence`) sidesteps Azure AD entirely and needs no directory permissions at all.
 
 ---
 
@@ -686,20 +717,67 @@ AKS Can Pull The Image
 
 ---
 
-## Get AKS Credentials
+## Configure kubectl
 
 ```yaml
-az aks get-credentials
+echo "${{ secrets.AKS_CA_CERT }}" | base64 -d > ${{ runner.temp }}/ca.crt
+kubectl config set-cluster aks-cluster \
+  --server="${{ secrets.AKS_API_SERVER }}" \
+  --certificate-authority=${{ runner.temp }}/ca.crt \
+  --embed-certs=true
+kubectl config set-credentials github-actions-deployer \
+  --token="${{ secrets.AKS_SA_TOKEN }}"
+kubectl config set-context aks-context \
+  --cluster=aks-cluster \
+  --user=github-actions-deployer \
+  --namespace=default
+kubectl config use-context aks-context
 ```
 
-Connects GitHub Actions to the AKS cluster.
+Connects `kubectl` to the AKS cluster, replacing what `az aks get-credentials` would normally do.
 
-This command automatically configures kubectl to communicate with the cluster.
+Same root cause as the ACR login above: `az aks get-credentials` needs an authenticated `az` session, which needs `azure/login`, which needs the Azure AD service principal this tenant won't let us create. So instead of authenticating as an Azure identity, the pipeline authenticates as a **Kubernetes-native identity** — a `ServiceAccount` created directly inside the cluster:
+
+```bash
+kubectl create serviceaccount github-actions-deployer -n default
+```
+
+with a `Role` + `RoleBinding` scoping it to only `deployments`, `replicasets`, `services`, `secrets`, and `pods` inside the `default` namespace (not full cluster-admin), and a long-lived token pulled from a manually-created `kubernetes.io/service-account-token` Secret bound to that ServiceAccount.
+
+Three secrets carry what's needed to build a kubeconfig context from scratch, entirely inside the job:
+
+```text
+AKS_API_SERVER  : the cluster's API server URL
+AKS_CA_CERT     : the cluster's CA certificate, base64-encoded
+AKS_SA_TOKEN    : the ServiceAccount's bearer token
+```
 
 Without this step:
 
 ```text
 kubectl Cannot Access AKS
+```
+
+---
+
+## Create Kubernetes Secrets
+
+```yaml
+kubectl create secret generic invint-secrets \
+  --from-literal=AZURE_OPENAI_ENDPOINT="${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
+  ...
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Builds (or updates) the `invint-secrets` Kubernetes Secret that `k8s/deployment.yaml`'s `envFrom` references, from the app-config values stored as GitHub Actions repository secrets (`AZURE_OPENAI_*`, `AZURE_SEARCH_*`, `POSTGRES_*` — the same keys the app reads locally from `.env` via `os.getenv(...)`).
+
+The `--dry-run=client -o yaml | kubectl apply -f -` pattern generates the Secret manifest locally instead of calling the cluster's create API directly, then applies it. This makes the step idempotent — re-running it on every deploy updates the existing Secret in place instead of failing with `AlreadyExists` on the second and subsequent runs.
+
+Without this step:
+
+```text
+Pod Starts With No POSTGRES_*/AZURE_*  Env Vars
+psycopg2.OperationalError On Startup
 ```
 
 ---
@@ -749,6 +827,3 @@ Waits until deployment completes successfully.
 This acts as a health check for the deployment process.
 
 If the deployment fails, the GitHub Action also fails.
-
-```
-```
