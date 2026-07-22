@@ -348,7 +348,7 @@ To confirm the extractor works in isolation:
 3. Visiting the base URL (`/`) showed "details not found" — there's no root/UI route defined at this stage.
 4. Visiting `/docs` showed the interactive, auto-generated API docs listing the available endpoints.
 
-**Architecture note:** since backend and UI aren't split into separate microservices in this project, all APIs are exposed directly through the UI via `app.py`, rather than behind a dedicated API surface. In a production/industry setting, backend and UI would normally be split into separate microservices. Authentication is also currently missing from these APIs — in production, they should require authentication to be reachable.
+**Architecture note:** since backend and UI aren't split into separate microservices in this project, all APIs are exposed directly through the UI via `app.py`, rather than behind a dedicated API surface. In a production/industry setting, backend and UI would normally be split into separate microservices. Authentication is also currently missing from these APIs, in production, they should require authentication to be reachable.
 
 ### Moving to the full UI
 
@@ -378,3 +378,5 @@ The process, step by step:
 - [x] Phase 5 — Postgres Flexible Server deployed, tables created, ingestion tested
 - [x] Phase 6 — KPI extractor wired end-to-end (vector store → GPT-5 → Postgres), key-normalization and determinism bugs fixed
 - [x] Phase 7 — Backend routes + UI (`app.py`) running locally end-to-end; upload → ingest → extract → store flow verified
+
+The contenarization and deployment using azure is covered in deployment-Document.md .
