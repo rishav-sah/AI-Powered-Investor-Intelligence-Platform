@@ -1,5 +1,4 @@
 import shutil
-import time
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -21,11 +20,6 @@ load_dotenv()
 app = FastAPI(
     title="AI-Powered Investor Intelligence Platform"
 )
-
-# Changes every process start (i.e. every deploy), so appending it to static
-# asset URLs forces browsers to fetch the new file instead of serving a
-# stale cached copy of style.css/etc. from before the deploy.
-STATIC_VERSION = str(int(time.time()))
 
 
 def _seed_data_if_empty():
@@ -103,8 +97,7 @@ def dashboard(request: Request):
         context={
             "metrics": metrics,
             "total_companies": len(metrics),
-            "total_reports": len(metrics),
-            "static_version": STATIC_VERSION
+            "total_reports": len(metrics)
         }
     )
 

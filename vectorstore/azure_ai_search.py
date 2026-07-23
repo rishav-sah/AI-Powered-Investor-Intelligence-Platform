@@ -53,36 +53,6 @@ class AzureAISearchVectorStore:
 
         print(f"Uploaded {uploaded}/{len(documents)} chunks.")
 
-        if uploaded == 0 and documents:
-            raise RuntimeError(
-                f"No chunks were uploaded to the vector store for '{source_file}' "
-                f"(company={company!r}, year={year!r}) — indexing failed."
-            )
-
-    def delete_by_source_file(self, source_file: str) -> int:
-        """
-        Delete all indexed chunks belonging to a given source file.
-
-        Returns the number of chunks successfully deleted.
-        """
-        escaped = source_file.replace("'", "''")
-
-        results = self.client.search(
-            search_text="*",
-            filter=f"source_file eq '{escaped}'",
-            select=["id"]
-        )
-
-        ids = [{"id": result["id"]} for result in results]
-
-        if not ids:
-            return 0
-
-        result = self.client.delete_documents(ids)
-
-        return sum(item.succeeded for item in result)
-
-
 class Retriever:
     """Simple wrapper around Azure Search client for retrieving relevant chunks.
     Mirrors the Retriever used in the RAG extractor.
@@ -100,12 +70,12 @@ class Retriever:
         """Retrieve relevant chunks from Azure AI Search.
         Returns a list of SimpleNamespace objects with `page_content`.
         """
-        filters = []
-        if company:
-            filters.append(f"company eq '{company}'")
-        if year:
-            filters.append(f"year eq '{year}'")
-        filter_expr = " and ".join(filters) if filters else None
+        filter_expr = None
+        if company and year:
+            filter_expr = (
+                f"company eq '{company}' "
+                f"and year eq '{year}'"
+            )
         results = (
             self.client.search(
                 search_text=query,
