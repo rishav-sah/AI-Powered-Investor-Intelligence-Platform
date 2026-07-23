@@ -1,4 +1,6 @@
+import shutil
 import time
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -26,11 +28,33 @@ app = FastAPI(
 STATIC_VERSION = str(int(time.time()))
 
 
+def _seed_data_if_empty():
+    """
+    On first boot against a fresh (empty) persistent volume, copy the sample
+    documents baked into the image (data/ -> seed_data/ in the dockerfile) back
+    into data/. Skipped once the volume already has content, so it never
+    clobbers real uploads on later restarts.
+    """
+    seed_dir = Path("seed_data")
+    raw_pdfs_dir = Path("data/raw_pdfs")
+
+    if not seed_dir.exists():
+        return
+
+    if raw_pdfs_dir.exists() and any(raw_pdfs_dir.iterdir()):
+        return
+
+    shutil.copytree(seed_dir, "data", dirs_exist_ok=True)
+    print("Seeded data/ from baked-in sample documents (empty volume on first boot)")
+
+
 @app.on_event("startup")
 def startup_event():
     """
     Initialize database and vector index on app startup.
     """
+    _seed_data_if_empty()
+
     create_database()
     create_tables()
     

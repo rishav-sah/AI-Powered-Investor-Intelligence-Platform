@@ -69,6 +69,7 @@ jobs:
 
       - name: Deploy Application
         run: |
+          kubectl apply -f k8s/data-pvc.yaml
           kubectl apply -f k8s/deployment.yaml
           kubectl apply -f k8s/service.yaml
 

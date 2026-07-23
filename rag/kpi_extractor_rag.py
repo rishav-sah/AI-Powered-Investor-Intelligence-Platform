@@ -17,8 +17,8 @@ class FinancialMetrics(BaseModel):
     cash_flow: str | int | None = Field(None, alias="Cash Flow from Operating Activities")
     total_assets: str | int | None = Field(None, alias="Total Assets")
     total_liabilities: str | int | None = Field(None, alias="Total Liabilities")
-    risk_factors: str | list | None = Field(None, alias="Top Risk Factors")
-    growth_drivers: str | list | None = Field(None, alias="Top Growth Drivers")
+    risk_factors: str | list[str] | None = Field(None, alias="Top Risk Factors")
+    growth_drivers: str | list[str] | None = Field(None, alias="Top Growth Drivers")
 
 
 class Retriever:

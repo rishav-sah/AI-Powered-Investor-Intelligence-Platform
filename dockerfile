@@ -13,6 +13,11 @@ RUN uv pip install --system -r requirements.txt
 # Copy application code into the container
 COPY . /app
 
+# Keep a pristine copy of the baked-in sample documents. Once a PersistentVolume
+# is mounted over /app/data at runtime, it shadows whatever was baked into the
+# image at that path — this lets the app re-seed an empty volume from here.
+RUN cp -r /app/data /app/seed_data
+
 # Expose the port the app will run on
 EXPOSE 8000
 
